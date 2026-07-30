@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --bg:#FBFBF9;
@@ -252,35 +252,48 @@
   .tab-btn:hover{border-color:var(--accent); color:var(--accent);}
   .tab-btn.active{background:var(--accent); border-color:var(--accent); color:#fff;}
 
-  .champion-box{
-    background:linear-gradient(180deg, var(--gold-light), var(--surface));
-    border:1px solid var(--gold);
-    border-radius:14px;
-    padding:26px;
-    text-align:center;
-    margin-bottom:22px;
+  .podium-row{
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr;
+    gap:14px;
+    margin-bottom:24px;
   }
-  .champion-label{
+  .podium-box{
+    border-radius:14px;
+    padding:20px 16px;
+    text-align:center;
+    border:1px solid var(--border);
+    background:var(--surface);
+  }
+  .podium-box.rank-1{ background:linear-gradient(180deg, var(--gold-light), var(--surface)); border-color:var(--gold); order:2; }
+  .podium-box.rank-2{ background:linear-gradient(180deg, var(--silver-light), var(--surface)); border-color:var(--silver); order:1; }
+  .podium-box.rank-3{ background:linear-gradient(180deg, var(--bronze-light), var(--surface)); border-color:var(--bronze); order:3; }
+  .podium-label{
     font-family:'Space Grotesk', sans-serif;
-    font-size:12px;
-    letter-spacing:0.15em;
+    font-size:11px;
+    letter-spacing:0.12em;
     text-transform:uppercase;
-    color:var(--gold);
     font-weight:700;
   }
-  .champion-name{
+  .podium-box.rank-1 .podium-label{ color:var(--gold); }
+  .podium-box.rank-2 .podium-label{ color:var(--silver); }
+  .podium-box.rank-3 .podium-label{ color:var(--bronze); }
+  .podium-name{
     font-family:'Space Grotesk', sans-serif;
-    font-size:26px;
+    font-size:18px;
     font-weight:700;
     color:var(--text);
     margin:8px 0 4px;
+    word-break:break-word;
   }
-  .champion-meta{
-    font-size:12.5px;
+  .podium-meta{
+    font-size:11.5px;
     color:var(--muted);
   }
-  table.groups tbody tr.champion-row{background:var(--gold-light); box-shadow:inset 3px 0 0 var(--gold);}
-  table.groups tbody tr.champion-row:hover{background:var(--gold-light);}
+  @media (max-width:720px){
+    .podium-row{ grid-template-columns:1fr; }
+    .podium-box.rank-1, .podium-box.rank-2, .podium-box.rank-3{ order:0; }
+  }
 
   .members-section{
     background:var(--surface);
@@ -641,7 +654,7 @@ let state = {
   schools:[...DEFAULT_SCHOOLS],
   config:{...DEFAULT_CONFIG},
   groupsCache:{},
-  championMembers:{},
+  positionMembers:{},
   loaded:false
 };
 
@@ -766,29 +779,37 @@ function onSchoolChosen(name){
   render();
 }
 
+function memberGroupKey(school, rank){ return school + '::rank' + rank; }
+
 async function loadChampionMembers(school){
-  if(state.championMembers[school] != null) return state.championMembers[school];
-  const list = await dbLoadMembers(school);
-  state.championMembers[school] = list;
-  return list;
+  if(state.positionMembers[school] != null) return state.positionMembers[school];
+  const [r1, r2, r3] = await Promise.all([
+    dbLoadMembers(memberGroupKey(school,1)),
+    dbLoadMembers(memberGroupKey(school,2)),
+    dbLoadMembers(memberGroupKey(school,3))
+  ]);
+  const byRank = {1:r1, 2:r2, 3:r3};
+  state.positionMembers[school] = byRank;
+  return byRank;
 }
-async function updateMember(school, id, value){
-  const list = state.championMembers[school] || [];
+async function updateMember(school, rank, id, value){
+  const list = (state.positionMembers[school] && state.positionMembers[school][rank]) || [];
   const m = list.find(x=>x.id===id);
   if(m) m.name = value;
   await dbUpdateMember(id, value);
 }
-async function addMemberRow(school){
-  const list = state.championMembers[school] || [];
+async function addMemberRow(school, rank){
+  const byRank = state.positionMembers[school] || (state.positionMembers[school] = {1:[],2:[],3:[]});
+  const list = byRank[rank] || (byRank[rank] = []);
   const nextPos = list.length;
-  const newMember = await dbInsertMember(school, nextPos);
+  const newMember = await dbInsertMember(memberGroupKey(school,rank), nextPos);
   if(!newMember){ showToast('Failed to add member'); return; }
   list.push(newMember);
-  state.championMembers[school] = list;
   render();
 }
-async function removeMemberRow(school, id){
-  state.championMembers[school] = (state.championMembers[school]||[]).filter(m=>m.id!==id);
+async function removeMemberRow(school, rank, id){
+  const byRank = state.positionMembers[school] || {};
+  if(byRank[rank]){ byRank[rank] = byRank[rank].filter(m=>m.id!==id); }
   await dbDeleteMember(id);
   render();
 }
@@ -871,35 +892,61 @@ function renderFinalSection(school, rows){
     return {...g, sn:i+1, appearance, effLoadScore, finalTotal: appearance+effLoadScore};
   });
 
-  let champion = null;
-  finalRows.forEach(r=>{ if(r.finalTotal>0 && (!champion || r.finalTotal>champion.finalTotal)) champion = r; });
-  const members = state.championMembers[school] || [];
+  const ranked = [...finalRows].filter(r=>r.finalTotal>0).sort((a,b)=>b.finalTotal-a.finalTotal);
+  const podium = {1: ranked[0]||null, 2: ranked[1]||null, 3: ranked[2]||null};
+  const podiumIds = {};
+  [1,2,3].forEach(r=>{ if(podium[r]) podiumIds[podium[r].id] = r; });
 
-  const bodyRows = finalRows.length ? finalRows.map(g=>`
-    <tr class="${champion && g.id===champion.id ? 'champion-row' : ''}">
+  const bodyRows = finalRows.length ? finalRows.map(g=>{
+    const rank = podiumIds[g.id];
+    return `
+    <tr class="${rank ? 'rank-'+rank : ''}">
       <td class="mono-num">${g.sn}</td>
       <td class="mono-num">${escapeHtml(String(g.class))}</td>
       <td>${escapeHtml(g.section||'')}</td>
-      <td>${escapeHtml(g.teamName||'')}${champion && g.id===champion.id ? '<span class="rank-tag rank-1">CHAMPION</span>' : ''}</td>
+      <td>${escapeHtml(g.teamName||'')}${rank ? `<span class="rank-tag rank-${rank}">${ordinal(rank)}</span>` : ''}</td>
       <td><input class="num-input" type="number" min="0" step="0.1" value="${g.appearance || ''}" onchange="updateField('${school}',${g.id},'appearance',this.value)"></td>
       <td class="mono-num">${g.effLoadScore.toFixed(2)}</td>
       <td class="mono-num total">${g.finalTotal.toFixed(2)}</td>
     </tr>
-  `).join('') : `<tr class="empty-row"><td colspan="7">No teams registered yet &mdash; add teams in the Results tab first.</td></tr>`;
+  `;}).join('') : `<tr class="empty-row"><td colspan="7">No teams registered yet &mdash; add teams in the Results tab first.</td></tr>`;
 
-  const memberRows = members.map((m,i)=>`
-    <div class="member-row">
-      <span class="member-sn">${i+1}.</span>
-      <input class="member-input" type="text" value="${escapeHtml(m.name)}" placeholder="Member name" onchange="updateMember('${school}',${m.id},this.value)">
-      <button class="member-del" title="Remove" onclick="removeMemberRow('${school}',${m.id})">&times;</button>
-    </div>
-  `).join('');
+  const membersByRank = state.positionMembers[school] || {1:[],2:[],3:[]};
+  const podiumLabels = {1:'&#129351; 1st Place', 2:'&#129352; 2nd Place', 3:'&#129353; 3rd Place'};
+
+  const podiumBoxes = [1,2,3].map(r=>{
+    const team = podium[r];
+    return `
+    <div class="podium-box rank-${r}">
+      <div class="podium-label">${podiumLabels[r]}</div>
+      <div class="podium-name">${team ? escapeHtml(team.teamName||'') : '&mdash;'}</div>
+      <div class="podium-meta">${team ? `Class ${escapeHtml(String(team.class))} &middot; Section ${escapeHtml(team.section||'')} &middot; Total ${team.finalTotal.toFixed(2)}` : 'Awaiting scores'}</div>
+    </div>`;
+  }).join('');
+
+  const memberSections = [1,2,3].map(r=>{
+    const members = membersByRank[r] || [];
+    const memberRows = members.map((m,mi)=>`
+      <div class="member-row">
+        <span class="member-sn">${mi+1}.</span>
+        <input class="member-input" type="text" value="${escapeHtml(m.name)}" placeholder="Member name" onchange="updateMember('${school}',${r},${m.id},this.value)">
+        <button class="member-del" title="Remove" onclick="removeMemberRow('${school}',${r},${m.id})">&times;</button>
+      </div>
+    `).join('');
+    return `
+    <div class="members-section">
+      <h3 class="members-title">${podiumLabels[r]} &mdash; Team Members</h3>
+      <p class="members-hint">${ordinal(r)}-place team roster &mdash; typed in manually.</p>
+      ${memberRows}
+      <div class="add-member-row">
+        <button class="ghost-btn" onclick="addMemberRow('${school}',${r})">+ Add Member</button>
+      </div>
+    </div>`;
+  }).join('');
 
   return `
-    <div class="champion-box">
-      <div class="champion-label">&#127942; Champion</div>
-      <div class="champion-name">${champion ? escapeHtml(champion.teamName||'') : '&mdash;'}</div>
-      <div class="champion-meta">${champion ? `Class ${escapeHtml(String(champion.class))} &middot; Section ${escapeHtml(champion.section||'')} &middot; Total ${champion.finalTotal.toFixed(2)}` : 'Awaiting scores'}</div>
+    <div class="podium-row">
+      ${podiumBoxes}
     </div>
 
     <div class="table-wrap" style="overflow-x:auto;">
@@ -914,14 +961,7 @@ function renderFinalSection(school, rows){
     </table>
     </div>
 
-    <div class="members-section">
-      <h3 class="members-title">Team Members</h3>
-      <p class="members-hint">Champion team roster &mdash; typed in manually.</p>
-      ${memberRows}
-      <div class="add-member-row">
-        <button class="ghost-btn" onclick="addMemberRow('${school}')">+ Add Member</button>
-      </div>
-    </div>
+    ${memberSections}
 
     <div class="pdf-row">
       <button class="btn secondary pdf-btn" onclick="generatePDF('${school}')">&#8681; Generate PDF Report</button>
@@ -1017,15 +1057,15 @@ function generatePDF(school){
   });
 
   let podiumY = doc.lastAutoTable.finalY + 22;
-  const podium = rows.filter(r=>r.rank).sort((a,b)=>a.rank-b.rank);
-  if(podium.length){
+  const topResults = rows.filter(r=>r.rank).sort((a,b)=>a.rank-b.rank);
+  if(topResults.length){
     doc.setFont('helvetica','bold');
     doc.setFontSize(11);
     doc.setTextColor(60,60,55);
     doc.text('Top Results', pageWidth/2, podiumY, {align:'center'});
     podiumY += 16;
     doc.setFontSize(10);
-    podium.forEach(r=>{
+    topResults.forEach(r=>{
       const label = (r.rank===1?'1st':r.rank===2?'2nd':'3rd') + ' \u2014 ' + (r.teamName||'\u2014') + ' (Total ' + r.total.toFixed(2) + ')';
       doc.setTextColor(r.rank===1?201:r.rank===2?138:184, r.rank===1?151:r.rank===2?144:115, r.rank===1?59:r.rank===2?153:61);
       doc.text(label, pageWidth/2, podiumY, {align:'center'});
@@ -1057,8 +1097,12 @@ function generatePDF(school){
     g.sn, g.class, g.section||'', g.teamName||'', g.appearance.toFixed(2), g.effLoadScore.toFixed(2), g.finalTotal.toFixed(2)
   ]);
 
-  let champion = null;
-  finalRows.forEach(r=>{ if(r.finalTotal>0 && (!champion || r.finalTotal>champion.finalTotal)) champion = r; });
+  const ranked = [...finalRows].filter(r=>r.finalTotal>0).sort((a,b)=>b.finalTotal-a.finalTotal);
+  const podium = {1: ranked[0]||null, 2: ranked[1]||null, 3: ranked[2]||null};
+  const podiumIds = {};
+  [1,2,3].forEach(r=>{ if(podium[r]) podiumIds[podium[r].id] = r; });
+  const rankFillColors = { 1:[251,243,225], 2:[241,242,243], 3:[251,238,227] };
+  const rankTextColors = { 1:[201,151,59], 2:[138,144,153], 3:[184,115,61] };
 
   doc.autoTable({
     head: head2, body: body2,
@@ -1068,26 +1112,36 @@ function generatePDF(school){
     styles:{ font:'helvetica', fontSize:8.5, cellPadding:5, textColor:[25,27,24], lineColor:[230,227,218], lineWidth:0.5 },
     headStyles:{ fillColor:[244,243,239], textColor:[100,103,96], fontStyle:'bold', fontSize:8 },
     didParseCell: function(data){
-      if(data.section === 'body' && champion && finalRows[data.row.index].id === champion.id){
-        data.cell.styles.fillColor = [251,243,225];
+      if(data.section === 'body'){
+        const r = podiumIds[finalRows[data.row.index].id];
+        if(r && rankFillColors[r]) data.cell.styles.fillColor = rankFillColors[r];
       }
     }
   });
 
   let y3 = doc.lastAutoTable.finalY + 26;
-  if(champion){
+  const podiumLabelText = { 1:'1st Place', 2:'2nd Place', 3:'3rd Place' };
+  const pageBottom = doc.internal.pageSize.getHeight() - 50;
+
+  [1,2,3].forEach(r=>{
+    const team = podium[r];
+    if(!team) return;
+
+    if(y3 + 40 > pageBottom){ doc.addPage(); y3 = drawHeader() + 10; }
+
     doc.setFont('helvetica','bold');
     doc.setFontSize(13);
-    doc.setTextColor(201,151,59);
-    doc.text('\u2666 Champion: ' + (champion.teamName||'\u2014') + ' (Total ' + champion.finalTotal.toFixed(2) + ')', pageWidth/2, y3, {align:'center'});
+    doc.setTextColor(rankTextColors[r][0], rankTextColors[r][1], rankTextColors[r][2]);
+    doc.text('\u2666 ' + podiumLabelText[r] + ': ' + (team.teamName||'\u2014') + ' (Total ' + team.finalTotal.toFixed(2) + ')', pageWidth/2, y3, {align:'center'});
     y3 += 24;
     doc.setFont('helvetica','bold');
     doc.setFontSize(11);
     doc.setTextColor(60,60,55);
-    doc.text('Team Members', marginX, y3);
+    doc.text(podiumLabelText[r] + ' Team Members', marginX, y3);
     y3 += 18;
 
-    const members = state.championMembers[school] || [];
+    const membersByRank = state.positionMembers[school] || {};
+    const members = membersByRank[r] || [];
     const list = members.length ? members : [{name:''},{name:''},{name:''},{name:''}];
     const numColW = 22;
     const lineX1 = marginX + numColW;
@@ -1095,10 +1149,12 @@ function generatePDF(school){
 
     doc.setFont('helvetica','normal');
     doc.setFontSize(10.5);
-    list.forEach((m, i)=>{
+    list.forEach((m)=>{
+      if(y3 + 22 > pageBottom){ doc.addPage(); y3 = drawHeader() + 10; }
+      const idx = list.indexOf(m);
       const name = m.name || '';
       doc.setTextColor(60,60,55);
-      doc.text((i+1) + '.', marginX, y3);
+      doc.text((idx+1) + '.', marginX, y3);
       if(name && name.trim()){
         doc.setTextColor(25,27,24);
         doc.text(name.trim(), lineX1 + 4, y3);
@@ -1110,7 +1166,8 @@ function generatePDF(school){
       y3 += 22;
     });
     doc.setTextColor(0,0,0);
-  }
+    y3 += 14;
+  });
 
   const filename = school.replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '-truss-bridge-results.pdf';
   doc.save(filename);
