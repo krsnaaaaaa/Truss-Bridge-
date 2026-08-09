@@ -610,6 +610,10 @@ async function dbDeleteGroup(id){
   const { error } = await sb.from('groups').delete().eq('id', id);
   if(error) console.error('dbDeleteGroup', error);
 }
+async function dbUpdateGroupNumber(id, number){
+  const { error } = await sb.from('groups').update({ number }).eq('id', id);
+  if(error) console.error('dbUpdateGroupNumber', error);
+}
 
 /* ============ DB HELPERS: MEMBERS ============ */
 async function dbLoadMembers(school){
@@ -984,18 +988,48 @@ async function updateField(school, id, field, value){
   await dbUpdateGroupField(id, field, value);
   render();
 }
+// Sorts groups by class (ascending), then section, keeping original
+// relative order as a stable tiebreaker, then reassigns `number` to
+// match that order (1..N) and persists any changed numbers to the DB.
+async function renumberGroups(school){
+  const list = state.groupsCache[school] || [];
+  const withIdx = list.map((g,i)=>({ g, i }));
+  withIdx.sort((a,b)=>{
+    const ca = Number(a.g.class) || 0, cb = Number(b.g.class) || 0;
+    if(ca !== cb) return ca - cb;
+    const sa = (a.g.section||'').toString().toLowerCase();
+    const sb_ = (b.g.section||'').toString().toLowerCase();
+    if(sa !== sb_) return sa < sb_ ? -1 : 1;
+    return a.i - b.i; // stable: preserve original order within same class/section
+  });
+
+  const sorted = withIdx.map(x=>x.g);
+  const updates = [];
+  sorted.forEach((g,idx)=>{
+    const newNum = idx+1;
+    if(g.number !== newNum){
+      g.number = newNum;
+      updates.push(dbUpdateGroupNumber(g.id, newNum));
+    }
+  });
+  await Promise.all(updates);
+  state.groupsCache[school] = sorted;
+}
+
 async function deleteGroup(school, id){
   state.groupsCache[school] = (state.groupsCache[school]||[]).filter(g=>g.id!==id);
   await dbDeleteGroup(id);
+  await renumberGroups(school);
   render();
 }
 async function addGroup(school, cls, section, teamName){
   const list = state.groupsCache[school] || [];
-  const nextNum = list.reduce((m,g)=>Math.max(m,g.number||0),0)+1;
-  const newGroup = await dbInsertGroup(school, cls, section, teamName, nextNum);
+  const tempNum = list.reduce((m,g)=>Math.max(m,g.number||0),0)+1;
+  const newGroup = await dbInsertGroup(school, cls, section, teamName, tempNum);
   if(!newGroup){ showToast('Failed to save team'); return; }
   list.push(newGroup);
   state.groupsCache[school] = list;
+  await renumberGroups(school);
   render();
   showToast('Team registered');
 }
